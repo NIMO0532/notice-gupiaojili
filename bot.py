@@ -67,10 +67,10 @@ class StockBot:
             return pd.DataFrame()
 
         # ====================== 修复2：去掉“草案”限制，命中所有公告 ======================
-        patterns = {
-            '员工持股计划': r'员工持股计划',
-            '股权激励': r'限制性股票激励|股票期权激励|股权激励'
-        }
+      patterns = {
+    '员工持股计划': r'员工持股计划|核心员工持股|管理层持股',
+    '股权激励': r'股权激励|限制性股票激励|股票期权激励|限制性股票|期权激励计划|股票激励计划|授予股票|预留限制性股票'
+      }
         all_pat = '|'.join(patterns.values())
         mask = df['标题'].str.contains(all_pat, na=False, regex=True)
         filtered = df[mask].copy()
