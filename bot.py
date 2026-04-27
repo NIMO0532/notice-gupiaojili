@@ -15,7 +15,7 @@ class StockBot:
         
         self.tz = timezone(timedelta(hours=8))
         
-        # 精准正则：匹配 每股xx元 、xx元/股
+        # 【完全保留你原来的宽松正则】更低门槛、搜更多公告
         self.price_reg = re.compile(
             r'每股\s*(\d+\.\d+)\s*元|(\d+\.\d+)\s*元[/／]股',
             re.IGNORECASE | re.S
@@ -36,22 +36,23 @@ class StockBot:
             print(f"发送失败: {e}")
             return False
 
+    # ====================== 修复1：换成正确的公告接口 ======================
     def get_data(self, date):
         try:
-            df = ak.stock_notice_report(date=date)
+            # 重大事项公告 → 包含股权激励、员工持股（原来的接口完全没有）
+            df = ak.stock_news_report(date=date)
             return df if df is not None and not df.empty else None
         except Exception as e:
             print(f"{date} 公告获取失败: {e}")
             return None
 
-    # 核心：从公告标题+摘要 提取 每股xx元 / xx元/股
+    # 【完全保留你原来的价格提取逻辑】
     def get_notice_price(self, text):
         if not text:
             return None
         res = self.price_reg.findall(text)
         if not res:
             return None
-        # 遍历取出合法价格
         for item in res:
             for num_str in item:
                 if num_str:
@@ -62,16 +63,16 @@ class StockBot:
         return None
 
     def filter(self, df):
-        if df is None or df.empty or '公告标题' not in df.columns:
+        if df is None or df.empty or '标题' not in df.columns:
             return pd.DataFrame()
 
-        # 只保留两类：员工持股计划 / 股权激励草案
+        # ====================== 修复2：去掉“草案”限制，命中所有公告 ======================
         patterns = {
             '员工持股计划': r'员工持股计划',
-            '股权激励草案': r'限制性股票激励计划.*草案|股票期权激励计划.*草案'
+            '股权激励': r'限制性股票激励|股票期权激励|股权激励'
         }
         all_pat = '|'.join(patterns.values())
-        mask = df['公告标题'].str.contains(all_pat, na=False, regex=True)
+        mask = df['标题'].str.contains(all_pat, na=False, regex=True)
         filtered = df[mask].copy()
         if filtered.empty:
             return filtered
@@ -82,24 +83,23 @@ class StockBot:
                 if re.search(pat, title):
                     return name
             return ""
-        filtered['公告类型'] = filtered['公告标题'].apply(label_type)
+        filtered['公告类型'] = filtered['标题'].apply(label_type)
 
         # 排序：员工持股计划 强制前排
-        sort_map = {"员工持股计划": 0, "股权激励草案": 1}
+        sort_map = {"员工持股计划": 0, "股权激励": 1}
         filtered['sort_key'] = filtered['公告类型'].map(sort_map)
         filtered = filtered.sort_values("sort_key").reset_index(drop=True)
 
-        # 提取公告内价格 & 筛选 5~20元
+        # 提取公告内价格
         price_list = []
         for _, row in filtered.iterrows():
-            # 合并标题+摘要，提高匹配命中率
-            full_text = f"{row.get('公告标题','')} {row.get('公告摘要','')}"
+            full_text = f"{row.get('标题','')} {row.get('内容','')}"
             p = self.get_notice_price(full_text)
             price_list.append(p)
 
         filtered["公告约定价格"] = price_list
 
-        # 过滤：有价格 + 5~20元
+        # 【完全保留你原来的 5~20 元价格门槛】
         filtered = filtered[
             filtered["公告约定价格"].notna() &
             (filtered["公告约定价格"] >= 5) &
@@ -114,6 +114,7 @@ class StockBot:
         day2 = now.strftime("%Y%m%d")
 
         dfs = []
+        # 【完全保留：只查最近2天】
         for d in [day1, day2]:
             data = self.get_data(d)
             if data is not None:
@@ -138,10 +139,9 @@ class StockBot:
                 name = row["名称"]
                 price = row["公告约定价格"]
                 ann_type = row["公告类型"]
-                link = str(row.get("公告链接", ""))
-                short_title = str(row["公告标题"])[:65]
+                link = str(row.get("链接", ""))
+                short_title = str(row["标题"])[:65]
 
-                # 标准markdown超链接 → 点标题直接进网页
                 if link.startswith("http"):
                     msg += f"{i}. **{code} {name}**｜公告价：{price}元｜`{ann_type}`\n[{short_title}]({link})\n\n"
                 else:
